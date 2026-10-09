@@ -7,7 +7,10 @@ that the model can eat.
 Run `pytest tests/test_data.py` after you fill them in.
 """
 
+from pathlib import Path
+
 import numpy as np
+from PIL import Image
 
 # Files with any other extension should be ignored.
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -50,7 +53,35 @@ def prepare_image(image):
     The web page does these same six steps in JavaScript. If your version is
     different, the self test badge at the top of your page turns red.
     """
-    raise NotImplementedError("Problem 2: fill in prepare_image")
+    # Step 1: convert to RGB (handles grayscale and PNG transparency)
+    img = image.convert("RGB")
+
+    # Step 2: resize so the shorter side is RESIZE, keeping aspect ratio
+    w, h = img.size
+    if w < h:
+        new_w = RESIZE
+        new_h = int(h * RESIZE / w)
+    else:
+        new_h = RESIZE
+        new_w = int(w * RESIZE / h)
+    img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
+    # Step 3: cut out the CROP x CROP square in the middle
+    left = (new_w - CROP) // 2
+    top = (new_h - CROP) // 2
+    img = img.crop((left, top, left + CROP, top + CROP))
+
+    # Step 4: convert to numpy array and divide by 255
+    x = np.array(img, dtype=np.float32) / 255.0
+
+    # Step 5: normalise each channel
+    for c in range(3):
+        x[:, :, c] = (x[:, :, c] - MEAN[c]) / STD[c]
+
+    # Step 6: put channels first: (H, W, C) -> (C, H, W)
+    x = np.transpose(x, (2, 0, 1))
+
+    return x
 
 
 def load_folder(root):
@@ -83,7 +114,33 @@ def load_folder(root):
     Memory: every image becomes 3 x 224 x 224 numbers of 4 bytes, about 0.6 MB.
     750 images is about 450 MB. That fits on Colab and on most laptops.
     """
-    raise NotImplementedError("Problem 2: fill in load_folder")
+    root = Path(root)
+    class_names = sorted(d.name for d in root.iterdir() if d.is_dir())
+
+    X_list = []
+    y_list = []
+    paths_list = []
+
+    for class_idx, class_name in enumerate(class_names):
+        folder = root / class_name
+        # Sort files so the order is the same every time
+        for file_path in sorted(f for f in folder.iterdir() if f.is_file()):
+            # Only image files — check extension case-insensitively
+            if file_path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            try:
+                img = Image.open(file_path)
+                x = prepare_image(img)
+                X_list.append(x)
+                y_list.append(class_idx)
+                paths_list.append(file_path)
+            except Exception:
+                # Broken files and anything else that cannot be read are skipped
+                continue
+
+    X = np.array(X_list, dtype=np.float32)
+    y = np.array(y_list, dtype=np.int64)
+    return X, y, class_names, paths_list
 
 
 def split_train_test(X, y, paths, test_ratio=0.2, seed=0):
@@ -102,4 +159,36 @@ def split_train_test(X, y, paths, test_ratio=0.2, seed=0):
         up with a class that has no test images at all, and then your accuracy
         number means nothing.
     """
-    raise NotImplementedError("Problem 2: fill in split_train_test")
+    rng = np.random.default_rng(seed)
+    classes = np.unique(y)
+
+    X_train, y_train, paths_train = [], [], []
+    X_test, y_test, paths_test = [], [], []
+
+    for c in classes:
+        mask = y == c
+        indices = np.where(mask)[0].copy()
+        rng.shuffle(indices)
+
+        # At least one per side; round the ratio
+        n_test = max(1, round(len(indices) * test_ratio))
+        if n_test == len(indices):
+            n_test = len(indices) - 1
+
+        test_idx = indices[:n_test]
+        train_idx = indices[n_test:]
+
+        X_test.append(X[test_idx])
+        y_test.append(y[test_idx])
+        paths_test.extend(paths[i] for i in test_idx)
+
+        X_train.append(X[train_idx])
+        y_train.append(y[train_idx])
+        paths_train.extend(paths[i] for i in train_idx)
+
+    X_train = np.concatenate(X_train)
+    y_train = np.concatenate(y_train)
+    X_test = np.concatenate(X_test)
+    y_test = np.concatenate(y_test)
+
+    return X_train, y_train, paths_train, X_test, y_test, paths_test

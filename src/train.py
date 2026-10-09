@@ -11,6 +11,7 @@ downloads the ImageNet weights, about 45 MB.
 
 import torch
 import torch.nn as nn
+from torchvision.models import resnet18, ResNet18_Weights
 
 
 def build_model(num_classes, pretrained=True, freeze=False):
@@ -35,7 +36,17 @@ def build_model(num_classes, pretrained=True, freeze=False):
     Do not put a softmax at the end. The loss function adds it for you, and the
     web page adds it for you.
     """
-    raise NotImplementedError("Problem 3: fill in build_model")
+    weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+    model = resnet18(weights=weights)
+    model.fc = nn.Linear(512, num_classes)
+
+    if freeze:
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.fc.parameters():
+            param.requires_grad = True
+
+    return model
 
 
 def train(model, X_train, y_train, X_test, y_test,
@@ -78,7 +89,82 @@ def train(model, X_train, y_train, X_test, y_test,
     The model is trained in place. When this function returns, `model` is the
     trained one, and it is left on the device it was trained on.
     """
-    raise NotImplementedError("Problem 3: fill in train")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    X_train_t = torch.from_numpy(X_train)
+    y_train_t = torch.from_numpy(y_train)
+    X_test_t = torch.from_numpy(X_test)
+    y_test_t = torch.from_numpy(y_test)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(
+        (p for p in model.parameters() if p.requires_grad), lr=lr
+    )
+
+    n = len(X_train)
+    history = {"train_loss": [], "train_acc": [],
+               "test_loss": [], "test_acc": []}
+
+    for epoch in range(epochs):
+        # Shuffle the training rows at the start of every epoch
+        perm = torch.randperm(n)
+        X_shuffled = X_train_t[perm]
+        y_shuffled = y_train_t[perm]
+
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+
+        for i in range(0, n, batch_size):
+            X_batch = X_shuffled[i:i + batch_size].to(device)
+            y_batch = y_shuffled[i:i + batch_size].to(device)
+
+            optimizer.zero_grad()
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item() * len(X_batch)
+            _, predicted = torch.max(outputs, 1)
+            train_correct += (predicted == y_batch).sum().item()
+            train_total += len(y_batch)
+
+        avg_train_loss = train_loss / train_total
+        train_acc = train_correct / train_total
+
+        # Evaluate on the test set (batched so it fits on the GPU)
+        model.eval()
+        test_loss = 0.0
+        test_correct = 0
+        m = len(X_test)
+        with torch.no_grad():
+            for i in range(0, m, batch_size):
+                X_batch = X_test_t[i:i + batch_size].to(device)
+                y_batch = y_test_t[i:i + batch_size].to(device)
+                outputs = model(X_batch)
+                loss = criterion(outputs, y_batch)
+                test_loss += loss.item() * len(X_batch)
+                _, predicted = torch.max(outputs, 1)
+                test_correct += (predicted == y_batch).sum().item()
+
+        avg_test_loss = test_loss / m
+        test_acc = test_correct / m
+
+        history["train_loss"].append(avg_train_loss)
+        history["train_acc"].append(train_acc)
+        history["test_loss"].append(avg_test_loss)
+        history["test_acc"].append(test_acc)
+
+        print(
+            f"Epoch {epoch + 1:3d}/{epochs}  "
+            f"train_loss={avg_train_loss:.4f}  train_acc={train_acc:.4f}  "
+            f"test_loss={avg_test_loss:.4f}  test_acc={test_acc:.4f}"
+        )
+
+    return history
 
 
 def count_trainable(model):
