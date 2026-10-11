@@ -111,7 +111,6 @@ def worst_examples(model, X, y, paths, k=10):
     mistakes.sort(key=lambda m: m["confidence"], reverse=True)
     return mistakes[:k]
 
-
 # ---------------------------------------------------------------------------
 # Everything below is written for you.
 # ---------------------------------------------------------------------------
